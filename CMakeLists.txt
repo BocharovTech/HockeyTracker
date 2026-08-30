@@ -1,35 +1,42 @@
-cmake_minimum_required(VERSION 3.16)
-
-set(QT_FORCE_MIN_CMAKE_VERSION_FOR_USING_QT 3.20)
+cmake_minimum_required(VERSION 3.22)
 
 project(HockeyTracker LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(CMAKE_PREFIX_PATH "D:/Qt/6.11.2/mingw_64")
+# Для Apple Silicon задаём архитектуру
+set(CMAKE_OSX_ARCHITECTURES arm64)
+
+# Qt6 из Homebrew (на Apple Silicon)
+set(CMAKE_PREFIX_PATH "/opt/homebrew/opt/qtbase")
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
-
-set(OpenCV_DIR "C:/opencv_mingw")
+find_package(Qt6 REQUIRED COMPONENTS Widgets Core)
 find_package(OpenCV REQUIRED)
 
+# Указываем исходные файлы с абсолютными путями через CMAKE_CURRENT_SOURCE_DIR
 set(PROJECT_SOURCES
-    main.cpp
-    mainwindow.cpp
-    mainwindow.h
-    mainwindow.ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mainwindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tracker.cpp
 )
 
-qt_add_executable(HockeyTracker ${PROJECT_SOURCES}
-    v1.mp4 v3.mp4)
+qt_add_executable(HockeyTracker
+    ${PROJECT_SOURCES}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mainwindow.ui
+)
 
 target_link_libraries(HockeyTracker PRIVATE
-    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt6::Widgets
+    Qt6::Core
     ${OpenCV_LIBS}
+)
+
+target_include_directories(HockeyTracker PRIVATE
+    ${OpenCV_INCLUDE_DIRS}
 )
