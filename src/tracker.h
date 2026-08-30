@@ -100,6 +100,7 @@ struct MovingTrack
     int missed = 0;
     int lastFrame = -1;
     bool initialized = false;
+    bool lost = false;
     std::deque<TimedPoint> history;
     cv::Mat puckTemplate;
 };
@@ -245,6 +246,7 @@ std::vector<Detection> mergeDetections(const std::vector<Detection> &contours,
                                        const std::vector<Detection> &hough);
 
 double motionFraction(const cv::Mat &motion, const cv::Point2f &center, double radius);
+double frameBlurScore(const cv::Mat &gray);
 
 void updateStaticClusters(std::vector<StaticCluster> &clusters,
                           const std::vector<Detection> &detections);

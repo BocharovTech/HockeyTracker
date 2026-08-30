@@ -365,6 +365,18 @@ double motionFraction(const cv::Mat &motion, const cv::Point2f &center, double r
            static_cast<double>(roi.area());
 }
 
+double frameBlurScore(const cv::Mat &gray)
+{
+    if (gray.empty())
+        return 0.0;
+
+    cv::Mat lap;
+    cv::Laplacian(gray, lap, CV_64F);
+    cv::Scalar mean, stddev;
+    cv::meanStdDev(lap, mean, stddev);
+    return stddev[0] * stddev[0];
+}
+
 void updateStaticClusters(std::vector<StaticCluster> &clusters,
                           const std::vector<Detection> &detections)
 {
@@ -596,6 +608,8 @@ bool localTemplateMatch(const cv::Mat &gray, const cv::Mat &templ,
 void updateMoving(MovingTrack &track, const Detection &d, const cv::Mat &gray,
                   int frame, double confidence, bool updateTempl)
 {
+    track.lost = false;
+
     if (!track.initialized)
     {
         track.position = d.center;
@@ -652,12 +666,19 @@ void missMoving(MovingTrack &track, const cv::Mat &frame)
 {
     if (!track.initialized)
         return;
+    track.lost = false;
     track.missed++;
     track.velocity.x = static_cast<float>(track.velocity.x * VELOCITY_DAMPING);
     track.velocity.y = static_cast<float>(track.velocity.y * VELOCITY_DAMPING);
     track.position = clampPoint(track.position + track.velocity, frame);
     track.predicted = clampPoint(track.position + track.velocity, frame);
     track.confidence *= 0.92;
+
+    const bool nearBorder = track.position.x <= 8.0f || track.position.y <= 8.0f ||
+                            track.position.x >= frame.cols - 9.0f ||
+                            track.position.y >= frame.rows - 9.0f;
+    if (track.missed >= 6 && nearBorder && magnitude(track.velocity) > 2.0)
+        track.lost = true;
 }
 
 double directionScore(const MovingTrack &track, const cv::Point2f &candidate)
@@ -676,7 +697,8 @@ double directionScore(const MovingTrack &track, const cv::Point2f &candidate)
 int chooseMovingDetection(const std::vector<Detection> &detections,
                           const cv::Mat &motion,
                           const MovingTrack &track,
-                          const std::vector<StaticPuck> &statics)
+                          const std::vector<StaticPuck> &statics,
+                          double blurScore)
 {
     if (detections.empty())
         return -1;
@@ -684,10 +706,16 @@ int chooseMovingDetection(const std::vector<Detection> &detections,
     int best = -1;
     double bestScore = -1e9;
     const double currentSpeed = magnitude(track.velocity);
+    const bool defocused = blurScore < 80.0;
 
     for (size_t i = 0; i < detections.size(); ++i)
     {
         const Detection &d = detections[i];
+
+        if (d.center.x < 0.0f || d.center.y < 0.0f ||
+            d.center.x >= motion.cols || d.center.y >= motion.rows)
+            continue;
+
         const double motionValue = motionFraction(motion, d.center, d.radius);
         const double predictedDistance = distanceBetween(d.center, track.predicted);
         const double lastDistance = distanceBetween(d.center, track.position);
@@ -695,6 +723,19 @@ int chooseMovingDetection(const std::vector<Detection> &detections,
         const double measuredSpeed = lastDistance;
         const double speedDiff = std::abs(measuredSpeed - currentSpeed);
         const double staticDistance = nearestStaticDistance(d.center, statics);
+
+        if (defocused && predictedDistance > 110.0 && motionValue < 0.12)
+            continue;
+
+        if (track.missed > 0)
+        {
+            const bool nearBorder = d.center.x < 18.0f || d.center.y < 18.0f ||
+                                    d.center.x > motion.cols - 18.0f ||
+                                    d.center.y > motion.rows - 18.0f;
+            const bool tooFarFromPrediction = predictedDistance > 180.0;
+            if (nearBorder && tooFarFromPrediction && motionValue < 0.08)
+                continue;
+        }
 
         if (staticDistance < 24.0)
         {
@@ -711,6 +752,9 @@ int chooseMovingDetection(const std::vector<Detection> &detections,
         score += 1.8 * dir;
         score += 1.2 * std::exp(-speedDiff / 35.0);
         score += 2.4 * std::clamp(motionValue / 0.20, 0.0, 1.0);
+
+        if (defocused && d.quality < 0.55)
+            score -= 1.5;
 
         if (staticDistance < 45.0)
             score -= 1.8 * (45.0 - staticDistance) / 45.0;
@@ -752,7 +796,7 @@ int chooseMovingDetection(const std::vector<Detection> &detections,
 
 bool recoverByTemplate(const cv::Mat &gray, const cv::Mat &motion,
                        MovingTrack &track, const std::vector<StaticPuck> &statics,
-                       int frame)
+                       int frame, double blurScore)
 {
     if (track.puckTemplate.empty())
         return false;
@@ -771,11 +815,15 @@ bool recoverByTemplate(const cv::Mat &gray, const cv::Mat &motion,
     const double staticDistance = nearestStaticDistance(center, statics);
 
     bool accept = false;
-    if (score >= TEMPLATE_STRONG_SCORE)
+    const bool defocused = blurScore < 80.0;
+    const double strongThreshold = defocused ? TEMPLATE_STRONG_SCORE + 0.12 : TEMPLATE_STRONG_SCORE;
+    const double acceptThreshold = defocused ? TEMPLATE_ACCEPT_SCORE + 0.12 : TEMPLATE_ACCEPT_SCORE;
+
+    if (score >= strongThreshold)
         accept = true;
-    else if (score >= TEMPLATE_ACCEPT_SCORE && motionValue >= 0.08)
+    else if (score >= acceptThreshold && motionValue >= 0.08)
         accept = true;
-    else if (score >= 0.60 && distanceBetween(center, track.predicted) < 100.0)
+    else if (score >= 0.60 && !defocused && distanceBetween(center, track.predicted) < 100.0)
         accept = true;
 
     if (staticDistance < 28.0)
@@ -798,8 +846,9 @@ bool recoverByTemplate(const cv::Mat &gray, const cv::Mat &motion,
 
 bool recoverByLocalHough(const cv::Mat &gray, const cv::Mat &motion,
                          MovingTrack &track, const std::vector<StaticPuck> &statics,
-                         int frame)
+                         int frame, double blurScore)
 {
+    const bool defocused = blurScore < 80.0;
     const int r = static_cast<int>(std::clamp(
         75.0 + magnitude(track.velocity) * 2.0 + track.missed * 10.0,
         75.0, 240.0));
@@ -852,7 +901,7 @@ bool recoverByLocalHough(const cv::Mat &gray, const cv::Mat &motion,
         }
     }
 
-    if (bestScore < 1.1)
+    if (bestScore < (defocused ? 1.8 : 1.1))
         return false;
 
     Detection d;
@@ -895,8 +944,11 @@ void drawMoving(cv::Mat &frame, const MovingTrack &track, int id)
                            static_cast<int>(std::round(track.position.y)));
     const int radius = std::max(13, static_cast<int>(std::round(track.radius + 7)));
 
-    cv::circle(frame, center, radius, cv::Scalar(0, 255, 0), 2);
-    cv::circle(frame, center, 4, cv::Scalar(0, 0, 255), -1);
+    const cv::Scalar outlineColor = track.lost ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
+    const cv::Scalar pointColor = track.lost ? cv::Scalar(255, 0, 0) : cv::Scalar(0, 0, 255);
+
+    cv::circle(frame, center, radius, outlineColor, 2);
+    cv::circle(frame, center, 4, pointColor, -1);
 
     const cv::Point2f pred = track.predicted;
     cv::circle(frame, cv::Point(static_cast<int>(pred.x), static_cast<int>(pred.y)),
@@ -908,9 +960,9 @@ void drawMoving(cv::Mat &frame, const MovingTrack &track, int id)
                     cv::Scalar(255, 0, 0), 2, cv::LINE_AA);
 
     std::ostringstream name;
-    name << "Шайба #" << id << " ДВИЖЕНИЕ";
+    name << "Шайба #" << id << " " << (track.lost ? "ПОТЕРЯНА" : "ДВИЖЕНИЕ");
     cv::putText(frame, name.str(), center + cv::Point(10, -radius),
-                cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(0, 255, 0), 2);
+                cv::FONT_HERSHEY_SIMPLEX, 0.55, outlineColor, 2);
 
     std::ostringstream info;
     info << std::fixed << std::setprecision(1)
@@ -1001,6 +1053,8 @@ void TrackerWorker::run()
         cv::Mat gray;
         if (!prepareGray(packet.frame, gray))
             continue;
+
+        const double blurScore = frameBlurScore(gray);
 
         cv::Mat binary;
         makeBinary(gray, binary);
@@ -1102,7 +1156,7 @@ void TrackerWorker::run()
         }
         else
         {
-            const int best = chooseMovingDetection(detections, motion, moving, statics);
+            const int best = chooseMovingDetection(detections, motion, moving, statics, blurScore);
             bool found = false;
 
             if (best >= 0)
@@ -1125,18 +1179,28 @@ void TrackerWorker::run()
                 found = true;
             }
 
-            if (!found && recoverByTemplate(gray, motion, moving, statics, packet.number))
+            if (!found && recoverByTemplate(gray, motion, moving, statics, packet.number, blurScore))
                 found = true;
 
-            if (!found && recoverByLocalHough(gray, motion, moving, statics, packet.number))
+            if (!found && recoverByLocalHough(gray, motion, moving, statics, packet.number, blurScore))
                 found = true;
+
+            const bool outOfBounds = moving.position.x < 0.0f || moving.position.y < 0.0f ||
+                                     moving.position.x > packet.frame.cols ||
+                                     moving.position.y > packet.frame.rows;
+            if (outOfBounds)
+            {
+                moving.lost = true;
+                moving.missed = MAX_MISSED_FRAMES + 1;
+            }
 
             if (!found)
                 missMoving(moving, packet.frame);
 
-            if (moving.missed > MAX_MISSED_FRAMES)
+            if (moving.missed > MAX_MISSED_FRAMES || moving.lost)
             {
                 moving.initialized = false;
+                moving.lost = true;
                 moving.puckTemplate.release();
                 moving.history.clear();
                 moving.confidence = 0;

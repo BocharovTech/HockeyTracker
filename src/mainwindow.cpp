@@ -89,17 +89,37 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), ui(new Ui::MainWindow), frames(12), results(12), stop(false), paused(false)
 {
     ui->setupUi(this);
-    setWindowTitle("Hockey Tracker");
+    setWindowTitle("Трекер шайбы");
+    setMinimumSize(900, 650);
+    resize(1100, 700);
+
+    ui->centralwidget->setStyleSheet(
+        "QWidget { background: qlineargradient(spread:pad, x1:0, y1:0, x2:0, y2:1, stop:0 #0d1320, stop:1 #111827); color: #edf3ff; }");
 
     QVBoxLayout *rootLayout = new QVBoxLayout(ui->centralwidget);
-    rootLayout->setContentsMargins(8, 8, 8, 8);
-    rootLayout->setSpacing(6);
+    rootLayout->setContentsMargins(12, 12, 12, 12);
+    rootLayout->setSpacing(10);
 
     QHBoxLayout *toolbar = new QHBoxLayout();
-    loadVideoButton = new QPushButton("Load video", this);
-    playPauseButton = new QPushButton("Pause", this);
-    statusLabel = new QLabel("Ready", this);
-    statusLabel->setStyleSheet("QLabel { color: #eaf1ff; background: rgba(30,30,30,140); padding: 4px 8px; border-radius: 4px; }");
+    toolbar->setContentsMargins(0, 0, 0, 0);
+    toolbar->setSpacing(10);
+
+    loadVideoButton = new QPushButton("Загрузить видео", this);
+    playPauseButton = new QPushButton("Пауза", this);
+    statusLabel = new QLabel("Готово", this);
+
+    loadVideoButton->setStyleSheet(
+        "QPushButton { background: #1d4ed8; color: white; border: none; border-radius: 10px; padding: 10px 18px; font-weight: 600; }"
+        "QPushButton:hover { background: #2563eb; }"
+        "QPushButton:pressed { background: #1e40af; }");
+
+    playPauseButton->setStyleSheet(
+        "QPushButton { background: #0f766e; color: white; border: none; border-radius: 10px; padding: 10px 18px; font-weight: 600; }"
+        "QPushButton:hover { background: #115e59; }"
+        "QPushButton:pressed { background: #134e4a; }");
+
+    statusLabel->setStyleSheet(
+        "QLabel { color: #eaf1ff; background: rgba(17, 24, 39, 170); border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 10px; padding: 8px 14px; font-weight: 600; }");
 
     toolbar->addWidget(loadVideoButton);
     toolbar->addWidget(playPauseButton);
@@ -109,7 +129,8 @@ MainWindow::MainWindow(QWidget *parent)
     ui->videoLabel->setMinimumSize(640, 480);
     ui->videoLabel->setScaledContents(false);
     ui->videoLabel->setAlignment(Qt::AlignCenter);
-    ui->videoLabel->setStyleSheet("QLabel { background: #111111; border: 1px solid #333333; border-radius: 6px; }");
+    ui->videoLabel->setStyleSheet(
+        "QLabel { background: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:1, stop:0 #050b12, stop:1 #111827); border: 1px solid rgba(148, 163, 184, 0.25); border-radius: 14px; color: #dbeafe; }");
 
     rootLayout->addLayout(toolbar);
     rootLayout->addWidget(ui->videoLabel, 1);
@@ -193,16 +214,16 @@ void MainWindow::loadVideo()
 
     stopWorkers();
     startWorkers(fileName.toStdString(), defaultTargetFps());
-    statusLabel->setText(QString("Loaded: %1").arg(fileName));
+    statusLabel->setText(QString("Загружено: %1").arg(fileName));
 }
 
 void MainWindow::togglePlayback()
 {
     paused.store(!paused.load());
     if (playPauseButton)
-        playPauseButton->setText(paused.load() ? "Play" : "Pause");
+        playPauseButton->setText(paused.load() ? "Продолжить" : "Пауза");
     if (statusLabel)
-        statusLabel->setText(paused.load() ? "Paused" : "Playing");
+        statusLabel->setText(paused.load() ? "Пауза" : "Воспроизведение");
 }
 
 void MainWindow::onResultReceived(const ResultPacket &packet)
@@ -227,14 +248,14 @@ void MainWindow::onResultReceived(const ResultPacket &packet)
     std::string status;
     if (!packet.calibrated)
     {
-        status = "Calibration...";
+        status = "Калибровка...";
     }
     else
     {
         std::ostringstream s;
-        s << "FPS: " << std::fixed << std::setprecision(1) << packet.fps
-          << " | Pucks: " << packet.trackedObjects
-          << " | Speed: " << std::fixed << std::setprecision(1) << packet.speed;
+        s << "Кадры/с: " << std::fixed << std::setprecision(1) << packet.fps
+          << " | Шайбы: " << packet.trackedObjects
+          << " | Скорость: " << std::fixed << std::setprecision(1) << packet.speed;
         status = s.str();
     }
     if (statusLabel)
