@@ -908,7 +908,7 @@ void drawMoving(cv::Mat &frame, const MovingTrack &track, int id)
                     cv::Scalar(255, 0, 0), 2, cv::LINE_AA);
 
     std::ostringstream name;
-    name << "Шайба #" << id << " ДВИЖУЩАЯСЯ";
+    name << "Шайба #" << id << " ДВИЖЕНИЕ";
     cv::putText(frame, name.str(), center + cv::Point(10, -radius),
                 cv::FONT_HERSHEY_SIMPLEX, 0.55, cv::Scalar(0, 255, 0), 2);
 
@@ -922,8 +922,9 @@ void drawMoving(cv::Mat &frame, const MovingTrack &track, int id)
 VideoReader::VideoReader(const std::string &path,
                          BlockingQueue<FramePacket> &output,
                          std::atomic<bool> &stop,
+                         std::atomic<bool> &paused,
                          double targetFps)
-    : path_(path), output_(output), stop_(stop), targetFps_(targetFps) {}
+    : path_(path), output_(output), stop_(stop), paused_(paused), targetFps_(targetFps) {}
 
 void VideoReader::run()
 {
@@ -939,7 +940,6 @@ void VideoReader::run()
     if (videoFps <= 0)
         videoFps = 30.0;
 
-    // Используем целевой FPS или FPS видеоfile
     double effectiveFps = (targetFps_ > 0) ? targetFps_ : videoFps;
     int delayMs = static_cast<int>(1000.0 / effectiveFps);
 
@@ -949,16 +949,19 @@ void VideoReader::run()
 
     while (!stop_.load())
     {
+        while (paused_.load() && !stop_.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
         if (!cap.read(frame))
             break;
 
         FramePacket packet;
         packet.frame = frame.clone();
         packet.number = frameNumber++;
+        packet.fps = effectiveFps;
         if (!output_.push(std::move(packet)))
             break;
 
-        // Контроль FPS: добавляем задержку если нужно
         if (targetFps_ > 0)
         {
             auto now = std::chrono::high_resolution_clock::now();
@@ -976,8 +979,9 @@ void VideoReader::run()
 // ---------- TrackerWorker ----------
 TrackerWorker::TrackerWorker(BlockingQueue<FramePacket> &input,
                              BlockingQueue<ResultPacket> &output,
-                             std::atomic<bool> &stop)
-    : input_(input), output_(output), stop_(stop) {}
+                             std::atomic<bool> &stop,
+                             std::atomic<bool> &paused)
+    : input_(input), output_(output), stop_(stop), paused_(paused) {}
 
 void TrackerWorker::run()
 {
@@ -991,6 +995,9 @@ void TrackerWorker::run()
     FramePacket packet;
     while (!stop_.load() && input_.pop(packet))
     {
+        while (paused_.load() && !stop_.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
         cv::Mat gray;
         if (!prepareGray(packet.frame, gray))
             continue;
@@ -1141,6 +1148,11 @@ void TrackerWorker::run()
         ResultPacket result;
         result.frame = packet.frame.clone();
         result.number = packet.number;
+        result.fps = packet.fps;
+        result.calibrationFrames = calibrationFrames;
+        result.totalFrames = packet.number + 1;
+        result.speed = moving.initialized ? magnitude(moving.velocity) : 0.0;
+        result.trackedObjects = moving.initialized ? 1 : 0;
         result.statics = statics;
         result.moving = moving;
         result.calibrated = calibrated;
@@ -1152,6 +1164,9 @@ void TrackerWorker::run()
             drawMoving(result.frame, moving, static_cast<int>(statics.size() + 1));
 
         std::ostringstream info;
+        info << "K: " << calibrationFrames << "/" << CALIBRATION_FRAMES
+             << " | FPS: " << std::fixed << std::setprecision(1) << result.fps
+             << " | SPEED: " << std::fixed << std::setprecision(1) << result.speed;
         cv::putText(result.frame, info.str(),
                     cv::Point(15, 28), cv::FONT_HERSHEY_SIMPLEX,
                     0.55, cv::Scalar(255, 255, 255), 1);

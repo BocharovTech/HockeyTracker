@@ -3,8 +3,10 @@
 
 #include <QMainWindow>
 #include <QLabel>
+#include <QPushButton>
 #include <QThread>
 #include <atomic>
+#include <string>
 #include "tracker.h"
 
 QT_BEGIN_NAMESPACE
@@ -38,22 +40,32 @@ public:
 
 public slots:
     void onResultReceived(const ResultPacket &packet);
+    void loadVideo();
+    void togglePlayback();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
 
 private:
+    void startWorkers(const std::string &videoPath, int targetFps = 60);
+    void stopWorkers();
+
     Ui::MainWindow *ui;
 
     BlockingQueue<FramePacket> frames;
     BlockingQueue<ResultPacket> results;
     std::atomic<bool> stop;
+    std::atomic<bool> paused;
 
-    VideoReader *reader;
-    TrackerWorker *tracker;
+    VideoReader *reader = nullptr;
+    TrackerWorker *tracker = nullptr;
 
-    Consumer *consumer;
-    QThread *consumerThread;
+    Consumer *consumer = nullptr;
+    QThread *consumerThread = nullptr;
+
+    QPushButton *loadVideoButton = nullptr;
+    QPushButton *playPauseButton = nullptr;
+    QLabel *statusLabel = nullptr;
 };
 
 #endif // MAINWINDOW_H

@@ -108,12 +108,18 @@ struct FramePacket
 {
     cv::Mat frame;
     int number = 0;
+    double fps = 0.0;
 };
 
 struct ResultPacket
 {
     cv::Mat frame;
     int number = 0;
+    double fps = 0.0;
+    int calibrationFrames = 0;
+    int totalFrames = 0;
+    double speed = 0.0;
+    int trackedObjects = 0;
     std::vector<StaticPuck> statics;
     MovingTrack moving;
     bool calibrated = false;
@@ -151,6 +157,15 @@ public:
         return true;
     }
 
+    void reset()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_.clear();
+        closed_ = false;
+        notEmpty_.notify_all();
+        notFull_.notify_all();
+    }
+
     void close()
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -176,6 +191,7 @@ public:
     VideoReader(const std::string &path,
                 BlockingQueue<FramePacket> &output,
                 std::atomic<bool> &stop,
+                std::atomic<bool> &paused,
                 double targetFps = 0.0);
 
 protected:
@@ -185,6 +201,7 @@ private:
     std::string path_;
     BlockingQueue<FramePacket> &output_;
     std::atomic<bool> &stop_;
+    std::atomic<bool> &paused_;
     double targetFps_;
 };
 
@@ -195,7 +212,8 @@ class TrackerWorker : public QThread
 public:
     TrackerWorker(BlockingQueue<FramePacket> &input,
                   BlockingQueue<ResultPacket> &output,
-                  std::atomic<bool> &stop);
+                  std::atomic<bool> &stop,
+                  std::atomic<bool> &paused);
 
 protected:
     void run() override;
@@ -204,6 +222,7 @@ private:
     BlockingQueue<FramePacket> &input_;
     BlockingQueue<ResultPacket> &output_;
     std::atomic<bool> &stop_;
+    std::atomic<bool> &paused_;
 };
 
 // ---------- Вспомогательные функции (объявления) ----------
